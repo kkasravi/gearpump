@@ -12,8 +12,9 @@ import Pack.packProject
 import org.scalajs.sbtplugin.cross.CrossProject
 object Build extends sbt.Build {
 
-
-  val copySharedSourceFiles = TaskKey[Unit]("copied shared services source code")
+  lazy val copySharedSourceFiles = Def.task {
+    println(s"Copy shared source code to project services...")
+  }
 
   val akkaVersion = "2.3.6"
   val kryoVersion = "0.3.2"
@@ -229,7 +230,7 @@ object Build extends sbt.Build {
   lazy val services: Project = services_full.jvm.
     settings(serviceJvmSettings: _*).
     settings(compile in Compile <<= (compile in Compile) dependsOn (fastOptJS in (serviceJS, Compile))).
-    dependsOn(streaming % "test->test;compile->compile", daemon % "test->test;compile->compile;provided")
+    dependsOn(streaming % "test->test;compile->compile", daemon % "test->test;compile->compile;provided", serviceJS % "test->test;compile->compile")
 
   lazy val serviceJvmSettings = commonSettings ++ noPublish ++ Seq(
     libraryDependencies ++= Seq(
@@ -279,12 +280,11 @@ object Build extends sbt.Build {
     skip in packageJSDependencies := false,
     scoverage.ScoverageSbtPlugin.ScoverageKeys.coverageExcludedPackages := ".*gearpump\\.dashboard.*",
 
-    copySharedSourceFiles := {
-      println(s"Copy shared source code to project services...")
+    fastOptJS in Compile := {
+      artifactPath := new java.io.File(distDashboardDirectory, moduleName.value + "-fastopt.js")
+      copySharedSourceFiles
+      (fastOptJS in Compile).value
     },
-
-    artifactPath in fastOptJS in Compile := new java.io.File(distDashboardDirectory, moduleName.value + "-fastopt.js"),
-    fastOptJS in Compile <<= (fastOptJS in Compile).dependsOn(copySharedSourceFiles),
 
     relativeSourceMaps := true,
     jsEnv in Test := new PhantomJS2Env(scalaJSPhantomJSClassLoader.value))
