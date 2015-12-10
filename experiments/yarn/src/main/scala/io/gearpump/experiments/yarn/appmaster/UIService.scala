@@ -16,14 +16,15 @@
  * limitations under the License.
  */
 
-package io.gearpump.experiments.yarn.master
+package io.gearpump.experiments.yarn.appmaster
 
 import akka.actor._
 import com.typesafe.config.ConfigFactory
 import io.gearpump.services.main.Services
+import io.gearpump.transport.HostPort
 import io.gearpump.util.{Constants, LogUtil}
 
-class ServicesLauncherActor(masters: Array[String], host: String, port: Int) extends Actor {
+class UIService(masters: List[HostPort], host: String, port: Int) extends Actor {
   private val LOG = LogUtil.getLogger(getClass)
   
   override def preStart(): Unit = {
@@ -36,7 +37,7 @@ class ServicesLauncherActor(masters: Array[String], host: String, port: Int) ext
     System.setProperty(Constants.GEARPUMP_HOSTNAME, host)
     for (index <- 0 until masters.length) {
       val masterHostPort = masters(index)
-       System.setProperty(s"${Constants.GEARPUMP_CLUSTER_MASTERS}.$index", masterHostPort)
+       System.setProperty(s"${Constants.GEARPUMP_CLUSTER_MASTERS}.$index", s"${masterHostPort.host}:${masterHostPort.port}")
     }
 
     ConfigFactory.invalidateCaches()
@@ -46,5 +47,5 @@ class ServicesLauncherActor(masters: Array[String], host: String, port: Int) ext
   override def receive: Receive = {
     case _ =>
       LOG.error(s"Unknown message received")
-  }  
+  }
 }

@@ -16,16 +16,4 @@
  * limitations under the License.
  */
 
-package io.gearpump.experiments.yarn.master
-
-import akka.testkit.TestKit
-import org.scalatest.{BeforeAndAfterAll, Suite}
-
-trait StopSystemAfterAll extends BeforeAndAfterAll {
-
-  this: TestKit with Suite =>
-  override protected def afterAll () {
-    super.afterAll ()
-    system.shutdown ()
-  }
-}
+package io.gearpump.experiments.yarn.appmaster
