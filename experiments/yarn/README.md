@@ -1,42 +1,18 @@
-![Alt text](http://g.gravizo.com/g?
-@startuml;
-participant "YARN NM";
-participant YarnApplicationMaster;
-participant ResourceManagerClient;
-participant "YARN RM";
-activate YarnApplicationMaster;
-YarnApplicationMaster -> YarnApplicationMaster: create NMClientAsync;
-YarnApplicationMaster -> "YARN NM": start;
-activate "YARN NM";
-YarnApplicationMaster --> ResourceManagerClient: create actor;
-activate ResourceManagerClient;
-ResourceManagerClient -> ResourceManagerClient: create AMRMClientAsync;
-ResourceManagerClient -> "YARN RM": connect;
-activate "YARN RM";
-ResourceManagerClient --> YarnApplicationMaster: RMConnected;
-YarnApplicationMaster --> ResourceManagerClient: RegisterAMMessage;
-ResourceManagerClient -> "YARN RM": registerApplicationMaster;
-ResourceManagerClient --> YarnApplicationMaster: RegisterAppMasterResponse;
-YarnApplicationMaster --> ResourceManagerClient: ContainerRequestMessage;
-ResourceManagerClient -> "YARN RM": addContainerRequest;
-"YARN RM" --> ResourceManagerClient: ContainersAllocated;
-ResourceManagerClient --> YarnApplicationMaster: ContainersAllocated;
-deactivate ResourceManagerClient;
-YarnApplicationMaster -> "YARN NM": startContainerAsync;
-"YARN NM" --> YarnApplicationMaster: ContainerStarted;
-deactivate YarnApplicationMaster;
-deactivate "YARN NM";
-deactivate "YARN RM";
-@enduml;
-)
-
 How to Start the Gearpump cluster on YARN
 =======================================
-1. Create HDFS folder /user/gearpump/, make sure all read-write rights are granted.
-2. Upload the gearpump-${version}.tar.gz jars to HDFS folder: /user/gearpump/
-3. Modify the config file ```conf/yarn.conf.template``` or create your own config file
-4. Start the gearpump yarn cluster, for example 
-  ``` bash
-  bin/yarnclient -version gearpump-$VERSION -config conf/yarn.conf
+1. Upload the gearpump-${version}.tar.gz or gearpump-${version}.zip to remote HDFS Folder,
+2. Launch the gearpump cluster on YARN
+  ```bash
+    yarnclient -launch /user/gearpump/gearpump.zip -storeConfig /tmp/application.conf
   ```
+  If you don't specify "-launch" option, it will read default package-path from gear.conf(gearpump.yarn.client.package-path).
+  Command "-storeConfig" will allow you to store the active configuration from the new started cluster.
+  You can start UI server, or use shell command with this configuration file.
 
+3. If you change the downloaded configuration file to "application.conf", and put it under class path, like conf/ folder, then
+   it will be effective. To Start the UI Server, you can:
+  ```bash
+  ## Switch current working directory to gearpump package root directory
+  copy /tmp/application.conf conf/application.conf
+  bin/services
+  ```

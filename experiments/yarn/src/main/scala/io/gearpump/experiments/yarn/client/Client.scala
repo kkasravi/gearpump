@@ -17,323 +17,171 @@
  */
 package io.gearpump.experiments.yarn.client
 
-import java.io.{File,FileNotFoundException}
+import java.io.{PrintWriter, FileOutputStream, InputStreamReader, IOException, FileInputStream, FileNotFoundException, OutputStreamWriter}
+import java.util.zip.ZipInputStream
 
-import java.util.concurrent.TimeUnit
-
-import akka.actor.ActorSystem
-import akka.http.scaladsl.Http
-import akka.http.scaladsl.client.RequestBuilding
-import akka.http.scaladsl.model.{HttpRequest, HttpResponse, StatusCodes}
-import akka.http.scaladsl.unmarshalling.Unmarshal
-import akka.stream.ActorMaterializer
-import akka.stream.scaladsl.{Flow, Sink, Source}
-import com.typesafe.config.ConfigFactory
-import io.gearpump.cluster.AppMasterToMaster.MasterData
-import io.gearpump.cluster.main.{ArgumentsParser, CLIOption, ParseResult}
+import com.typesafe.config.{Config, ConfigValueFactory}
+import io.gearpump.cluster.ClusterConfig
+import io.gearpump.cluster.main.{ArgumentsParser, CLIOption}
 import io.gearpump.experiments.yarn
-import io.gearpump.experiments.yarn.{AppConfig, ContainerLaunchContext}
-import io.gearpump.services._
-import io.gearpump.util.{Constants, LogUtil}
+import io.gearpump.experiments.yarn.Constants
+import io.gearpump.experiments.yarn.appmaster.AppMasterCommand
+import io.gearpump.experiments.yarn.glue.{YarnClient, YarnConfig}
+import io.gearpump.util.{AkkaApp, LogUtil, Util}
+import org.apache.commons.httpclient.HttpClient
+import org.apache.commons.httpclient.methods.GetMethod
 import org.apache.hadoop.fs.{FileSystem, Path}
-import org.apache.hadoop.yarn.api.ApplicationConstants
-import org.apache.hadoop.yarn.api.ApplicationConstants.Environment
 import org.apache.hadoop.yarn.api.records._
-import org.apache.hadoop.yarn.client.api.YarnClient
-import org.apache.hadoop.yarn.conf.YarnConfiguration
-import org.apache.hadoop.yarn.util.{Apps, Records}
 import org.slf4j.Logger
+import java.io.File
 
-import scala.collection.JavaConversions._
-import scala.concurrent.duration.Duration
 import scala.util.{Failure, Success, Try}
+import org.apache.hadoop.fs.Path
 
-
-/**
-Features for YARNClient
-- [ ] Configuration file needs to indicate how many workers to allocate with possible locations
-- [ ] Configuration file needs to specify minimum master ram, vmcore requirements
-- [ ] Configuration file needs to specify minimum worker ram, vmcore requirements
-- [ ] Configuration file should specify where in HDFS to place jars for appmaster and workers
-- [ ] Client needs to use YARN cluster API to find best nodes to run Master(s)
-- [ ] Client needs to use YARN cluster API to find best nodes to run Workers
- */
-
-trait ClientAPI {
-  def getConfiguration: AppConfig
-  def getCommand: String
-  def getYarnConf: YarnConfiguration
-  def getAppEnv: Map[String, String]
-  def getAMCapability: Resource
-  def waitForTerminalState(appId: ApplicationId): ApplicationReport
-  def start(): Boolean
-  def submit(): Try[ApplicationId]
-}
-
-class Client(configuration: AppConfig, yarnConf: YarnConfiguration, yarnClient: YarnClient,
-             containerLaunchContext: (String) => ContainerLaunchContext, fileSystem: FileSystem) extends ClientAPI {
-  import Client._
+class Client(val appName: String, val akka: Config, val yarnConf: YarnConfig, yarnClient: YarnClient, fs: FileSystem, gearPackagePath: String) {
   import yarn.Constants._
 
   private val LOG: Logger = LogUtil.getLogger(getClass)
-  def getConfiguration = configuration
-  def getYarnConf = yarnConf
-  def getFs = FileSystem.get(getYarnConf)
-  private def getEnv = getConfiguration.getEnv _
 
-  private val version = configuration.getEnv("version")
-  private val confOnYarn = getEnv(HDFS_ROOT) + "/conf/"
-  private val restURI = s"api/$REST_VERSION"
+  private val queue = akka.getString(APPMASTER_QUEUE)
+  private val memory = akka.getString(APPMASTER_MEMORY).toInt
+  private val vcore = akka.getString(APPMASTER_VCORES).toInt
 
+  private val version = Util.version
 
-  private[client] def getMemory(envVar: String): Int = {
-    try {
-      getEnv(envVar).trim.toInt
-    } catch {
-      case throwable: Throwable =>
-        MEMORY_DEFAULT
-    }
-  }
-
-  def getCommand = {
-    val exe = getEnv(YARNAPPMASTER_COMMAND)
-    val classPath = Array(
-      s"pack/$version/conf",
-      s"pack/$version/dashboard",
-      s"pack/$version/lib/*",
-      s"pack/$version/lib/daemon/*",
-      s"pack/$version/lib/services/*",
-      s"pack/$version/lib/yarn/*",
-      "yarnConf"
-    )
-    val mainClass = getEnv(YARNAPPMASTER_MAIN)
-    val logdir = ApplicationConstants.LOG_DIR_EXPANSION_VAR
-    val command = s"$exe  -cp ${classPath.mkString(File.pathSeparator)}${File.pathSeparator}" +
-      "$CLASSPATH" +
-      s" -D${Constants.GEARPUMP_HOME}=${Environment.LOCAL_DIRS.$$()}/${Environment.CONTAINER_ID.$$()}/pack" +
-      s" $mainClass" +
-      s" -version $version" +
-      " 1>" + logdir +"/" + ApplicationConstants.STDOUT +
-      " 2>" + logdir +"/" + ApplicationConstants.STDERR
-
-    LOG.info(s"command=$command")
-    command
-  }
-
-  def getAppEnv: Map[String, String] = {
-    val appMasterEnv = new java.util.HashMap[String,String]
-    for (
-      c <- getYarnConf.getStrings(
-        YarnConfiguration.YARN_APPLICATION_CLASSPATH,
-        YarnConfiguration.DEFAULT_YARN_APPLICATION_CLASSPATH.mkString(File.pathSeparator))
-    ) {
-      Apps.addToEnvironment(appMasterEnv, Environment.CLASSPATH.name(),
-        c.trim(), File.pathSeparator)
-    }
-    Apps.addToEnvironment(appMasterEnv, Environment.CLASSPATH.name(),
-      Environment.PWD.$()+File.separator+"*", File.pathSeparator)
-    appMasterEnv.toMap
-  }
-
-  def uploadConfigToHDFS: Boolean = {
-    val localConfigPath = getEnv("config")
-    val configDir = new Path(confOnYarn)
-    val hdfsConfigPath = new Path(confOnYarn + YARN_CONFIG)
-    if(!getFs.exists(configDir.getParent)){
-      getFs.mkdirs(configDir.getParent)
-    }
-    Try(getFs.copyFromLocalFile(false, true, new Path(localConfigPath), hdfsConfigPath)) match {
-      case Success(a) =>
-        LOG.info(s"$localConfigPath uploaded to $hdfsConfigPath")
-        true
-      case Failure(error) =>
-        LOG.error(s"$localConfigPath could not be uploaded to $hdfsConfigPath ${error.getMessage}")
-        false
-    }
-  }
-
-  def getAMCapability: Resource = {
-    val capability = Records.newRecord(classOf[Resource])
-    capability.setMemory(getMemory(YARNAPPMASTER_MEMORY))
-    capability.setVirtualCores(getEnv(YARNAPPMASTER_VCORES).toInt)
-    capability
-  }
-
-  private def clusterResources: ClusterResources = {
-    val nodes:Seq[NodeReport] = yarnClient.getNodeReports(NodeState.RUNNING)
-    nodes.foldLeft(ClusterResources(0L, 0, Map.empty[String, Long]))((clusterResources, nodeReport) => {
-      val resource = nodeReport.getCapability
-      ClusterResources(clusterResources.totalFreeMemory+resource.getMemory,
-        clusterResources.totalContainers+nodeReport.getNumContainers,
-        clusterResources.nodeManagersFreeMemory+(nodeReport.getNodeId.getHost->resource.getMemory))
-    })
-  }
-
-  private def getApplicationReport(appId: ApplicationId): (ApplicationReport, YarnApplicationState) = {
-    val appReport = yarnClient.getApplicationReport(appId)
-    val appState = appReport.getYarnApplicationState
-    (appReport, appState)
-  }
-
-  def waitForTerminalState(appId: ApplicationId): ApplicationReport = {
-    var appReport = yarnClient.getApplicationReport(appId)
-    var appState = appReport.getYarnApplicationState
-    var terminalState = false
-
-    while (!terminalState) {
-      appState match {
-        case YarnApplicationState.FINISHED =>
-          LOG.info(s"Application $appId finished with state $appState at ${appReport.getFinishTime}")
-          terminalState = true
-        case YarnApplicationState.KILLED =>
-          LOG.info(s"Application $appId finished with state $appState at ${appReport.getFinishTime}")
-          terminalState = true
-        case YarnApplicationState.FAILED =>
-          LOG.info(s"Application $appId finished with state $appState at ${appReport.getFinishTime}")
-          terminalState = true
-        case YarnApplicationState.SUBMITTED =>
-          val (ar, as) = getApplicationReport(appId)
-          appReport = ar
-          appState = as
-        case YarnApplicationState.ACCEPTED =>
-          val (ar, as) = getApplicationReport(appId)
-          appReport = ar
-          appState = as
-        case YarnApplicationState.RUNNING =>
-          LOG.info(s"Application $appId is $appState trackingURL=${appReport.getTrackingUrl}")
-          terminalState = true
-        case unknown: YarnApplicationState =>
-          LOG.info(s"Application $appId is $appState")
-          val (ar, as) = getApplicationReport(appId)
-          appReport = ar
-          appState = as
-      }
-      Thread.sleep(1000)
-    }
-    appReport
-  }
-
-  def logMasters(report: ApplicationReport): Unit = {
-    import upickle.default.read
-    implicit val system = ActorSystem("httpclient")
-    implicit val materializer = ActorMaterializer()
-    import concurrent.ExecutionContext.Implicits.global
-    LOG.info(s"trackingURL=${report.getTrackingUrl}")
-    val trackingURL = new java.net.URL(report.getTrackingUrl)
-    system.scheduler.scheduleOnce(Duration(5, TimeUnit.SECONDS)) {
-      LOG.info(s"host=${trackingURL.getHost} port=${trackingURL.getPort} uri=/proxy/${report.getApplicationId}/$restURI/master")
-      lazy val trackingURLConnectionFlow: Flow[HttpRequest, HttpResponse, Any] =
-        Http().outgoingConnection(trackingURL.getHost, trackingURL.getPort)
-      val response = Source.single(RequestBuilding.Get(s"/proxy/${report.getApplicationId}/$restURI/master")).via(trackingURLConnectionFlow).runWith(Sink.head)
-      response.foreach(response => {
-        response.status match {
-          case StatusCodes.OK =>
-            LOG.info(s"status code=${StatusCodes.OK.intValue}")
-            Unmarshal(response.entity).to[String].onComplete(result => {
-              result match {
-                case Success(data) =>
-                  val masterData = read[MasterData](data)
-                  LOG.info(s"leader=${masterData.masterDescription.leader._1}:${masterData.masterDescription.leader._2}")
-                  val cluster=masterData.masterDescription.cluster.map(p=>{p._1+":"+p._2}).mkString(",")
-                  LOG.info("masters=" + cluster)
-                case Failure(throwable) =>
-                  LOG.error("Failed to fetch masters", throwable)
-              }
-              system.shutdown()
-            })
-          case value =>
-            LOG.error(s"Bad status code=${value.intValue}")
-            system.shutdown()
-        }
-      })
-    }
-  }
-
-  def start(): Boolean = {
-    Try({
-      yarnClient.init(yarnConf)
-      yarnClient.start()
-      true
-    }) match {
-      case Success(success) =>
-        success
-      case Failure(throwable) =>
-        LOG.error("Failed to start", throwable)
-        false
-    }
-  }
-
-  def submit(): Try[ApplicationId] = {
-    Try({
-      val appContext = yarnClient.createApplication.getApplicationSubmissionContext
-      appContext.setApplicationName(getEnv(YARNAPPMASTER_NAME))
-
-      val containerContext = containerLaunchContext(getCommand)
-      appContext.setAMContainerSpec(containerContext)
-      appContext.setResource(getAMCapability)
-      appContext.setQueue(getEnv(YARNAPPMASTER_QUEUE))
-
-      yarnClient.submitApplication(appContext)
-      appContext.getApplicationId
-    })
-  }
-
-  private def deploy(): Unit = {
+  def submit(): ApplicationReport = {
     LOG.info("Starting AM")
-    Try({
-      uploadConfigToHDFS && start() match {
-        case true =>
-          submit() match {
-            case Success(appId) =>
-              val report = waitForTerminalState(appId)
-              logMasters(report)
-            case Failure(throwable) =>
-              LOG.error("Failed to submit", throwable)
-          }
-        case false =>
-      }
-    }).failed.map(throwable => {
-      LOG.error("Failed to deploy", throwable)
-    })
+
+    // first step, check the version, to make sure local version matches remote version
+    val rootEntry = rootEntryPath(zip = gearPackagePath)
+
+    if (!rootEntry.contains(version)) {
+      throw new IOException(s"Check version failed! Local gearpump binary version $version doesn't match with remote path $gearPackagePath")
+    }
+
+    val resource = Resource.newInstance(memory, vcore)
+    val appId = yarnClient.createApplication
+
+    // will upload the configs to HDFS home directory of current user.
+    LOG.info("Uploading configuration files to remote HDFS(under /user/<id>/.gearpumpapp_)...")
+    val configPath = uploadConfigToHDFS(appId)
+
+    val command = AppMasterCommand(akka, rootEntry, Array(s"-conf $configPath", s"-package $gearPackagePath"))
+
+    yarnClient.submit(appName, appId, command.get, resource, queue, gearPackagePath, configPath)
+
+    LOG.info("Waiting application to finish...")
+    val report = yarnClient.awaitApplicaition(appId)
+    LOG.info(s"Application $appId finished with state ${report.getYarnApplicationState} at ${report.getFinishTime}, info: ${report.getDiagnostics}")
+    Console.println("================================================")
+    Console.println("===Application Id: " + appId)
+    report
   }
 
+  private def uploadConfigToHDFS(appId: ApplicationId): String = {
+    // will use personal home directory so that it will not conflict with other users
+    val confDir = new Path(fs.getHomeDirectory(), s".gearpump_app${appId.getId}/conf/")
+
+    // copy config from local to remote.
+    val remoteConfFile = new Path(confDir, "gear.conf")
+    var out = fs.create(remoteConfFile)
+    var writer = new OutputStreamWriter(out)
+
+    val filterJvmReservedKeys = ClusterConfig.filterOutJvmReservedKeys(akka)
+
+    writer.write(filterJvmReservedKeys.root().render())
+    writer.close()
+    out.close()
+
+    // save yarn-site.xml to remote
+    val yarn_site_xml = new Path(confDir, "yarn-site.xml")
+    out = fs.create(yarn_site_xml)
+    writer = new OutputStreamWriter(out)
+    yarnConf.conf.writeXml(writer)
+    writer.close()
+    out.close()
+
+    // save log4j.properties to remote
+    val log4j_properties = new Path(confDir, "log4j.properties")
+    val log4j = LogUtil.loadConfiguration
+    out = fs.create(log4j_properties)
+    writer = new OutputStreamWriter(out)
+    log4j.store(writer, "gearpump on yarn")
+    writer.close()
+    out.close()
+    confDir.toString
+  }
+
+  def rootEntryPath(zip: String): String = {
+    val stream = new ZipInputStream(fs.open(new Path(zip)))
+    val entry = stream.getNextEntry()
+    val name = entry.getName
+    name.substring(0, entry.getName.indexOf("/"))
+  }
 }
 
-object Client extends App with ArgumentsParser {
+object Client extends AkkaApp with ArgumentsParser {
 
-  case class ClusterResources(totalFreeMemory: Long, totalContainers: Int, nodeManagersFreeMemory: Map[String, Long])
+  override protected def akkaConfig: Config = {
+    ClusterConfig.load.default
+  }
 
   override val options: Array[(String, CLIOption[Any])] = Array(
-    "jars" -> CLIOption[String]("<AppMaster jar directory>", required = false),
-    "version" -> CLIOption[String]("<gearpump version, we allow multiple gearpump version to co-exist on yarn>", required = true),
-    "main" -> CLIOption[String]("<AppMaster main class>", required = false),
-    "config" ->CLIOption[String]("<Config file path>", required = true),
-    "verbose" -> CLIOption("<print verbose log on console>", required = false, defaultValue = Some(false))
+    "launch" -> CLIOption[String]("<Please specify the gearpump.zip package path on HDFS. If not specified, we will use default value /user/gearpump/gearpump.zip>", required = false),
+    "name" ->CLIOption[String]("<Application name showed in YARN>", required = false, defaultValue = Some("Gearpump")),
+    "verbose" -> CLIOption("<print verbose log on console>", required = false, defaultValue = Some(false)),
+    "storeConfig" -> CLIOption("<local path where the master config should be stored>", required = false, defaultValue = None)
   )
 
-  val parseResult: ParseResult = parse(args)
-  val config = ConfigFactory.parseFile(new File(parseResult.getString("config")))
+  override def main(akkaConf: Config, args: Array[String]): Unit = {
+    val parsed = parse(args)
 
-  val verbose = parseResult.getBoolean("verbose")
-  if (verbose) {
-    LogUtil.verboseLogToConsole
+    val name = parsed.getString("name")
+    if (parsed.getBoolean("verbose")) {
+      LogUtil.verboseLogToConsole
+    }
+
+    val yarnConfig = new YarnConfig()
+
+    val packagePath = if (parsed.exists("launch")) {
+      parsed.getString("launch")
+    } else {
+      akkaConf.getString(Constants.PACKAGE_PATH)
+    }
+
+    val yarnClient = new YarnClient(yarnConfig, akkaConf)
+
+    val fs = FileSystem.get(yarnConfig.conf)
+    val client = new Client(name, akkaConf, yarnConfig, yarnClient, fs, packagePath)
+
+    Try {
+      val report = client.submit()
+
+      if (parsed.exists("storeConfig")) {
+        val storeFile = new File(parsed.getString("storeConfig"))
+        val configUrl = s"${report.getOriginalTrackingUrl}/api/v1.0/master/config"
+        storeConfig(configUrl, storeFile)
+      }
+
+    }.recover {
+      case ex: FileNotFoundException =>
+        Console.err.println (s"${
+          ex.getMessage
+        }\n" +
+          s"try to check if your gearpump version is right " +
+          s"or HDFS was correctly configured.")
+      case ex => help;
+        throw ex
+    }
   }
 
-  def apply(appConfig: AppConfig  = new AppConfig(parseResult, config), conf: YarnConfiguration  = new YarnConfiguration,
-            client: YarnClient  = YarnClient.createYarnClient) = {
-    new Client(appConfig, conf, client, ContainerLaunchContext(conf, appConfig), FileSystem.get(conf)).deploy()
-  }
+  private def storeConfig(url: String, targetFile: File): Unit = {
+    val client = new HttpClient()
+    val get = new GetMethod(url)
+    val status = client.executeMethod(get)
 
-  def apply(appConfig: AppConfig, conf: YarnConfiguration, client: YarnClient,
-            containerLaunchContext: (String) => ContainerLaunchContext, fileSystem: FileSystem) = {
-    new Client(appConfig, conf, client, containerLaunchContext, fileSystem).deploy()
-  }
-
-  Try(apply()).recover{
-    case ex:FileNotFoundException =>
-      Console.err.println(s"${ex.getMessage}\n" +
-        s"try to check if your gearpump version is right " +
-        s"or HDFS was correctly configured.")
-    case ex => help; throw ex
+    val out = new PrintWriter(targetFile)
+    out.print(get.getResponseBodyAsString())
+    out.close()
   }
 }

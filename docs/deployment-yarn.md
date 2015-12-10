@@ -4,11 +4,20 @@ title: Deployment with YARN
 ---
 
 ## How to Start the Gearpump cluster on YARN
-1. Create HDFS folder /user/gearpump/, make sure all read-write rights are granted.
-2. Either build gearpump or have access to the distribution file.
-3. Upload the distribution gearpump-pack-2.11.5-{{ site.GEARPUMP_VERSION }}.tar.gz jars to HDFS folder: /user/gearpump/, you can refer to [How to get gearpump distribution](get-gearpump-distribution.html) to get the Gearpump binary.
-4. Modify the config file ```conf/yarn.conf``` to either enable or disable services (gearpump.services.enabled).
-5. Start the gearpump yarn cluster, for example 
-``` bash
-bin/yarnclient -version gearpump-pack-2.11.5-{{ site.GEARPUMP_VERSION }} -config conf/yarn.conf
-```
+1. Upload the gearpump-${version}.tar.gz or gearpump-${version}.zip to remote HDFS Folder,
+2. Launch the gearpump cluster on YARN
+  ```bash
+    ### /user/gearpump/gearpump.zip points to the HDFS file
+    yarnclient -launch /user/gearpump/gearpump.zip -storeConfig /tmp/application.conf
+  ```
+  If you don't specify "-launch" option, it will read default package-path from gear.conf(gearpump.yarn.client.package-path).
+  Command "-storeConfig" will allow you to store the active configuration from the new started cluster.
+  You can start UI server, or use shell command with this configuration file.
+
+3. If you change the downloaded configuration file to "application.conf", and put it under class path, like conf/ folder, then
+   it will be effective. To Start the UI Server, you can:
+  ```bash
+  ## Switch current working directory to gearpump package root directory
+  copy /tmp/application.conf conf/application.conf
+  bin/services
+  ```
