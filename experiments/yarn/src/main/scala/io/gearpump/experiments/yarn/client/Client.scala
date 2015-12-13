@@ -143,7 +143,7 @@ object Client extends AkkaApp with ArgumentsParser {
 
     val yarnConfig = new YarnConfig()
 
-    val packagePath = if (parsed.exists("package")) {
+    val packagePath = if (parsed.exists("launch")) {
       parsed.getString("launch")
     } else {
       akkaConf.getString(Constants.PACKAGE_PATH)
