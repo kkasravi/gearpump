@@ -210,3 +210,4 @@ class LoggerSink[T] extends DataSink {
   override def close() = Unit
 }
 
+trait TypedDataSink[T] extends DataSink
