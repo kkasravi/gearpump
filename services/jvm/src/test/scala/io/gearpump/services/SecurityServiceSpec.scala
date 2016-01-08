@@ -16,19 +16,8 @@
  * limitations under the License.
  */
 
-package akka.stream.gearpump
+package io.gearpump.services
 
-import akka.stream.Attributes
-import org.scalatest.{FlatSpec, Matchers, WordSpec}
-
-class AttributesSpec extends FlatSpec with Matchers {
-  it should "merge the attributes together" in {
-    val a = Attributes.name("aa")
-    val b = Attributes.name("bb")
-
-    val c = a and b
-
-    assert("aa-bb" == c.nameOrDefault())
-  }
+class SecurityServiceSpec {
 
 }
