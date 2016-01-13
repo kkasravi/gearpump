@@ -26,16 +26,23 @@ import io.gearpump.cluster.AppMasterToMaster.{GetWorkerData, WorkerData}
 import io.gearpump.cluster.ClientToMaster.{QueryHistoryMetrics, QueryWorkerConfig, ResolveWorkerId}
 import io.gearpump.cluster.MasterToClient.{HistoryMetrics, HistoryMetricsItem, ResolveWorkerIdResult, WorkerConfig}
 import io.gearpump.cluster.worker.WorkerSummary
+import io.gearpump.jarstore.JarStoreService
 import org.scalatest.{BeforeAndAfterAll, FlatSpec, Matchers}
 
 import scala.concurrent.duration._
 import scala.util.{Success, Try}
 import akka.http.scaladsl.testkit.{RouteTestTimeout, ScalatestRouteTest}
 
-class WorkerServiceSpec extends FlatSpec with ScalatestRouteTest with WorkerService with Matchers with BeforeAndAfterAll {
+class WorkerServiceSpec extends FlatSpec with ScalatestRouteTest  with Matchers with BeforeAndAfterAll {
   def actorRefFactory = system
 
   val mockWorker = TestProbe()
+
+  def master = mockMaster.ref
+
+  lazy val jarStoreService = JarStoreService.get(system.settings.config)
+
+  def workerRoute = new WorkerService(master, system).route
 
   mockWorker.setAutoPilot {
     new AutoPilot {
@@ -64,7 +71,6 @@ class WorkerServiceSpec extends FlatSpec with ScalatestRouteTest with WorkerServ
     }
   }
 
-  def master = mockMaster.ref
 
   "ConfigQueryService" should "return config for worker" in {
     implicit val customTimeout = RouteTestTimeout(15.seconds)

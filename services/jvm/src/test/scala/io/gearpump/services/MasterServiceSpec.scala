@@ -43,8 +43,8 @@ import scala.concurrent.{Future, ExecutionContext}
 import scala.concurrent.duration._
 import scala.util.{Success, Try}
 
-class MasterServiceSpec extends FlatSpec with ScalatestRouteTest with MasterService with
-  Matchers with BeforeAndAfterAll with JarStoreProvider{
+class MasterServiceSpec extends FlatSpec with ScalatestRouteTest with
+  Matchers with BeforeAndAfterAll {
   import upickle.default.{read, write}
 
   def actorRefFactory = system
@@ -53,7 +53,11 @@ class MasterServiceSpec extends FlatSpec with ScalatestRouteTest with MasterServ
 
   lazy val jarStoreService = JarStoreService.get(system.settings.config)
 
-  override def getJarStoreService: JarStoreService = jarStoreService
+  def master = mockMaster.ref
+
+  def jarStore: JarStoreService = jarStoreService
+
+  def masterRoute = new MasterService(master, jarStore, system).route
 
   mockWorker.setAutoPilot {
     new AutoPilot {
@@ -97,7 +101,6 @@ class MasterServiceSpec extends FlatSpec with ScalatestRouteTest with MasterServ
     }
   }
 
-  def master = mockMaster.ref
 
   it should "return master info when asked" in {
     implicit val customTimeout = RouteTestTimeout(15.seconds)

@@ -39,8 +39,8 @@ import akka.http.scaladsl.testkit.ScalatestRouteTest
 import scala.concurrent.duration._
 import scala.util.{Success, Try}
 
-class AppMasterServiceSpec extends FlatSpec with ScalatestRouteTest with AppMasterService
-  with Matchers with BeforeAndAfterAll with JarStoreProvider{
+class AppMasterServiceSpec extends FlatSpec with ScalatestRouteTest
+  with Matchers with BeforeAndAfterAll {
 
   private val LOG: Logger = LogUtil.getLogger(getClass)
   def actorRefFactory = system
@@ -50,7 +50,11 @@ class AppMasterServiceSpec extends FlatSpec with ScalatestRouteTest with AppMast
 
   lazy val jarStoreService = JarStoreService.get(system.settings.config)
 
-  override def getJarStoreService: JarStoreService = jarStoreService
+  def jarStore: JarStoreService = jarStoreService
+
+  def master = mockMaster.ref
+
+  def appMasterRoute = new AppMasterService(master, jarStore, system).route
 
   mockAppMaster.setAutoPilot {
     new AutoPilot {
@@ -91,8 +95,6 @@ class AppMasterServiceSpec extends FlatSpec with ScalatestRouteTest with AppMast
       }
     }
   }
-
-  def master = mockMaster.ref
 
   "AppMasterService" should "return a JSON structure for GET request when detail = false" in {
     implicit val customTimeout = RouteTestTimeout(15.seconds)
