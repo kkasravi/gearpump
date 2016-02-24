@@ -18,7 +18,7 @@
 
 package akka.stream.gearpump.module
 
-import akka.stream.impl.StreamLayout.Module
+import akka.stream.impl.StreamLayout.{AtomicModule, Module}
 import akka.stream.impl.{SinkModule, SourceModule}
 import akka.stream.{Attributes, MaterializationContext, SinkShape, SourceShape}
 import org.reactivestreams.{Publisher, Subscriber}
@@ -47,7 +47,7 @@ import org.reactivestreams.{Publisher, Subscriber}
  *
  *
  */
-trait DummyModule extends Module
+trait DummyModule extends AtomicModule
 
 
 /**

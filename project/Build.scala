@@ -19,7 +19,8 @@ object Build extends sbt.Build {
 
   val copySharedSourceFiles = TaskKey[Unit]("copied shared services source code")
 
-  val akkaVersion = "2.3.12"
+  val akkaVersion = "2.4.2"
+  val akkaStreamVersion = "2.4-SNAPSHOT"
   val kryoVersion = "0.3.2"
   val clouderaVersion = "2.6.0-cdh5.4.2"
   val clouderaHBaseVersion = "1.0.0-cdh5.4.2"
@@ -37,7 +38,7 @@ object Build extends sbt.Build {
   val slf4jVersion = "1.7.7"
   val gsCollectionsVersion = "6.2.0"
 
-  val crossScalaVersionNumbers = Seq("2.10.5", "2.11.5")
+  val crossScalaVersionNumbers = Seq("2.11.5")
   val scalaVersionNumber = crossScalaVersionNumbers.last
   val sprayVersion = "1.3.2"
   val sprayJsonVersion = "1.3.1"
@@ -136,10 +137,8 @@ object Build extends sbt.Build {
       "com.typesafe.akka" %% "akka-contrib" % akkaVersion
         exclude("com.typesafe.akka", "akka-persistence-experimental_2.11"),
       "com.typesafe.akka" %% "akka-cluster" % akkaVersion,
-      "com.typesafe.akka" %% "akka-http-experimental" % "1.0",
-      "com.typesafe.akka" %% "akka-http-core-experimental" % "1.0",
-      "com.typesafe.akka" %% "akka-stream-experimental" % "1.0",
-      "com.typesafe.akka" %% "akka-http-spray-json-experimental"% "1.0",
+      "com.typesafe.akka" %% "akka-http-experimental" % akkaStreamVersion,
+      "com.typesafe.akka" %% "akka-http-spray-json-experimental"% akkaStreamVersion,
       "commons-logging" % "commons-logging" % commonsLoggingVersion,
       "com.github.patriknw" %% "akka-data-replication" % dataReplicationVersion,
       "org.apache.hadoop" % "hadoop-common" % clouderaVersion  % "provided"
@@ -148,8 +147,7 @@ object Build extends sbt.Build {
 
   val streamingDependencies = Seq(
     libraryDependencies ++= Seq(
-      "com.github.intel-hadoop" % "gearpump-shaded-gs-collections" % gsCollectionsVersion,
-      "com.typesafe.akka" %% "akka-stream-experimental" % "1.0"
+      "com.github.intel-hadoop" % "gearpump-shaded-gs-collections" % gsCollectionsVersion
     )
   )
 
@@ -274,7 +272,7 @@ object Build extends sbt.Build {
 
   lazy val serviceJvmSettings = commonSettings ++ noPublish ++ Seq(
     libraryDependencies ++= Seq(
-      "com.typesafe.akka" %% "akka-http-testkit-experimental"% "1.0" % "test",
+      "com.typesafe.akka" %% "akka-http-testkit" % akkaStreamVersion % "test",
       "org.scalatest" %% "scalatest" % scalaTestVersion % "test",
       "com.lihaoyi" %% "upickle" % upickleVersion,
       "com.softwaremill" %% "akka-http-session" % "0.1.4",
@@ -334,7 +332,8 @@ object Build extends sbt.Build {
     settings = commonSettings ++ noPublish ++ myAssemblySettings ++
       Seq(
         libraryDependencies ++= Seq(
-          "org.json4s" %% "json4s-jackson" % "3.2.11"
+          "org.json4s" %% "json4s-jackson" % "3.2.11",
+          "com.typesafe.akka" %% "akka-stream" % akkaStreamVersion
         ),
         mainClass in (Compile, packageBin) := Some("akka.stream.gearpump.example.Test")
       )

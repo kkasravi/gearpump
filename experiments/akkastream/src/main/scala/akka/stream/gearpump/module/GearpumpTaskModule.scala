@@ -19,7 +19,7 @@
 package akka.stream.gearpump.module
 
 import akka.stream.impl.FlowModule
-import akka.stream.impl.StreamLayout.Module
+import akka.stream.impl.StreamLayout.{AtomicModule, Module}
 import akka.stream.{Attributes, Inlet, Outlet, Shape, SinkShape, SourceShape}
 import io.gearpump.cluster.UserConfig
 import io.gearpump.streaming.sink.DataSink
@@ -33,15 +33,15 @@ import io.gearpump.streaming.task.Task
  * for local materializer.
  * 
  */
-trait GearpumpTaskModule extends Module
+trait GearpumpTaskModule extends AtomicModule
 
 /**
  * This is used to represent the Gearpump Data Source
- * @param source
- * @param conf
- * @param shape
- * @param attributes
- * @tparam T
+ * @param source DataSource
+ * @param conf UserConfig
+ * @param shape SourceShape[T}
+ * @param attributes Attributes
+ * @tparam T type
  */
 final case class SourceTaskModule[T](
    source: DataSource,
@@ -50,7 +50,6 @@ final case class SourceTaskModule[T](
    attributes: Attributes = Attributes.name("SourceTaskModule"))
   extends GearpumpTaskModule {
 
-  override def subModules: Set[Module] = Set.empty
   override def withAttributes(attr: Attributes): Module = this.copy(shape = amendShape(attr), attributes = attr)
   override def carbonCopy: Module = this.copy(shape = SourceShape(Outlet[T]("SourceTaskModule.out")))
 
@@ -63,17 +62,17 @@ final case class SourceTaskModule[T](
     val thatN = attr.nameOrDefault(null)
 
     if ((thatN eq null) || thisN == thatN) shape
-    else shape.copy(outlet = Outlet(thatN + ".out"))
+    else shape.copy(out = Outlet(thatN + ".out"))
   }
 }
 
 /**
  * This is used to represent the Gearpump Data Sink
- * @param sink
- * @param conf
- * @param shape
- * @param attributes
- * @tparam IN
+ * @param sink DataSink
+ * @param conf UserConfig
+ * @param shape SinkShape[IN]
+ * @param attributes Attributes
+ * @tparam IN type
  */
 final case class SinkTaskModule[IN](
     sink: DataSink,
@@ -82,7 +81,6 @@ final case class SinkTaskModule[IN](
     attributes: Attributes = Attributes.name("SinkTaskModule"))
   extends GearpumpTaskModule {
 
-  override def subModules: Set[Module] = Set.empty
   override def withAttributes(attr: Attributes): Module = this.copy(shape = amendShape(attr), attributes = attr)
   override def carbonCopy: Module = this.copy(shape = SinkShape(Inlet[IN]("SinkTaskModule.in")))
 
@@ -95,18 +93,18 @@ final case class SinkTaskModule[IN](
     val thatN = attr.nameOrDefault(null)
 
     if ((thatN eq null) || thisN == thatN) shape
-    else shape.copy(inlet = Inlet(thatN + ".out"))
+    else shape.copy(in = Inlet(thatN + ".out"))
   }
 }
 
 /**
  * This is to represent the Gearpump Processor which has exact one input and one output
- * @param processor
- * @param conf
- * @param attributes
- * @tparam IN
- * @tparam OUT
- * @tparam Unit
+ * @param processor Class[_ <: Task]
+ * @param conf UserConfig
+ * @param attributes Attributes
+ * @tparam IN type
+ * @tparam OUT type
+ * @tparam Unit void
  */
 case class ProcessorModule[IN, OUT, Unit](
     processor: Class[_ <: Task],
